@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_ID: str = "rzp_test_xxxxxxxxxxxx"
     RAZORPAY_KEY_SECRET: str = "xxxxxxxxxxxxxxxxxxxx"
 
-    # ── SMS ──
+    # ── SMS / Auth ──
     SMS_PROVIDER: str = "console"  # "console" = print OTP to terminal
+    AUTH_MODE: str = "firebase"    # "firebase" or "local"
+    FIREBASE_CREDENTIALS_PATH: str = "firebase-adminsdk.json"
 
     # ── OTP ──
     OTP_EXPIRE_SECONDS: int = 300  # 5 minutes

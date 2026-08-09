@@ -16,7 +16,8 @@ class SendOtpResponse(BaseModel):
 
 class VerifyOtpRequest(BaseModel):
     phone: str
-    otp: str
+    otp: str | None = None
+    id_token: str | None = None
     is_cleaner_app: bool = False
 
 

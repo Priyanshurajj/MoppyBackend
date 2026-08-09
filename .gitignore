@@ -8,6 +8,7 @@ venv/
 
 # Environment
 .env
+firebase-adminsdk.json
 
 # IDE
 .idea/

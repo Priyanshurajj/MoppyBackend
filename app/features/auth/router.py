@@ -19,8 +19,21 @@ from app.features.auth.schemas import (
     UserAddressResponse
 )
 from app.db.models import User, UserAddress
+from app.core.config import get_settings
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+settings = get_settings()
+
+if settings.AUTH_MODE == "firebase":
+    try:
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
+            firebase_admin.initialize_app(cred)
+    except Exception as e:
+        print(f"Failed to initialize Firebase Admin SDK: {e}")
 
 
 @router.post("/send-otp", response_model=SendOtpResponse)
@@ -29,6 +42,13 @@ def send_otp(request: SendOtpRequest):
     Generate a 4-digit OTP and store it in Redis with a 5-min TTL.
     In dev mode, OTP is printed to the terminal console.
     """
+    settings = get_settings()
+    if settings.AUTH_MODE == "firebase":
+        return SendOtpResponse(
+            message="Firebase auth enabled. Client handles OTP.",
+            phone=request.phone
+        )
+        
     auth_service.send_otp(request.phone)
     return SendOtpResponse(
         message="OTP sent successfully", phone=request.phone
@@ -38,9 +58,33 @@ def send_otp(request: SendOtpRequest):
 @router.post("/verify-otp", response_model=VerifyOtpResponse)
 def verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     """
-    Validate OTP from Redis. If valid, create/fetch user and return JWT.
+    Validate OTP from Redis or Firebase Token. If valid, create/fetch user and return JWT.
     """
-    is_valid = auth_service.verify_otp(request.phone, request.otp)
+    settings = get_settings()
+    if settings.AUTH_MODE == "firebase":
+        if not request.id_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="id_token is required for Firebase auth",
+            )
+        try:
+            decoded_token = firebase_auth.verify_id_token(request.id_token)
+            firebase_phone = decoded_token.get("phone_number")
+            if firebase_phone != request.phone:
+                print(f"Warning: requested phone {request.phone} doesn't match firebase phone {firebase_phone}")
+                # Use firebase verified phone as source of truth
+                request.phone = firebase_phone 
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid Firebase token: {str(e)}",
+            )
+        is_valid = True
+    else:
+        if not request.otp:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="otp is required in local mode")
+        is_valid = auth_service.verify_otp(request.phone, request.otp)
+
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
