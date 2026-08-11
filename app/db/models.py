@@ -126,10 +126,25 @@ class Service(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class OrderGroup(Base):
+    __tablename__ = "order_groups"
+
+    id = Column(String(100), primary_key=True)  # uuid
+    customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    total_amount = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    customer = relationship("User", foreign_keys=[customer_id])
+    bookings = relationship("Booking", back_populates="order_group")
+    payment = relationship("Payment", back_populates="order_group", uselist=False)
+
+
 class Booking(Base):
     __tablename__ = "bookings"
 
     id = Column(Integer, primary_key=True, index=True)
+    order_group_id = Column(String(100), ForeignKey("order_groups.id"), nullable=True)
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     cleaner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     service_id = Column(Integer, ForeignKey("services.id"), nullable=False)
@@ -138,6 +153,7 @@ class Booking(Base):
     status = Column(Enum(BookingStatus), default=BookingStatus.PENDING)
 
     scheduled_time = Column(DateTime, nullable=True)  # For SCHEDULED bookings
+    actual_start_time = Column(DateTime, nullable=True) # For Live Timer
     duration_mins = Column(Integer, nullable=False)  # 30, 60, 90 etc.
 
     customer_address = Column(Text, nullable=False)
@@ -151,6 +167,7 @@ class Booking(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
+    order_group = relationship("OrderGroup", back_populates="bookings")
     customer = relationship("User", back_populates="bookings", foreign_keys=[customer_id])
     cleaner = relationship("User", foreign_keys=[cleaner_id])
     service = relationship("Service")
@@ -161,7 +178,9 @@ class Payment(Base):
     __tablename__ = "payments"
 
     id = Column(Integer, primary_key=True, index=True)
-    booking_id = Column(Integer, ForeignKey("bookings.id"), unique=True, nullable=False)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), unique=True, nullable=True) # Legacy or single booking
+    order_group_id = Column(String(100), ForeignKey("order_groups.id"), unique=True, nullable=True) # Cart bookings
+    
     razorpay_order_id = Column(String(100), nullable=True)
     razorpay_payment_id = Column(String(100), nullable=True)
     razorpay_signature = Column(String(200), nullable=True)
@@ -171,3 +190,4 @@ class Payment(Base):
 
     # Relationships
     booking = relationship("Booking", back_populates="payment")
+    order_group = relationship("OrderGroup", back_populates="payment")

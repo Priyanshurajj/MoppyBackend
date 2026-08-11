@@ -176,10 +176,12 @@ def start_job(
     db: Session = Depends(get_db)
 ):
     """Validate customer's Start OTP to begin cleaning."""
+    from datetime import datetime, timezone
+    
     booking = db.query(Booking).filter(
         Booking.id == booking_id,
         Booking.cleaner_id == profile.user_id,
-        Booking.status == BookingStatus.ASSIGNED
+        Booking.status.in_([BookingStatus.ASSIGNED, BookingStatus.EN_ROUTE])
     ).first()
     
     if not booking:
@@ -189,6 +191,7 @@ def start_job(
         raise HTTPException(400, "Invalid Start OTP provided by customer")
         
     booking.status = BookingStatus.IN_PROGRESS
+    booking.actual_start_time = datetime.now(timezone.utc)
     booking.end_service_otp = str(random.randint(1000, 9999))
     db.commit()
     

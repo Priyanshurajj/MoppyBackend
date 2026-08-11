@@ -17,7 +17,30 @@ from app.features.bookings.schemas import (
     PaymentVerifyRequest,
 )
 
+import asyncio
+
 router = APIRouter(prefix="/api/bookings", tags=["Bookings"])
+
+async def auto_cancel_booking(db: Session, order_group_id: str):
+    """Wait for 5 minutes and cancel unassigned bookings in the order."""
+    await asyncio.sleep(300) # 5 minutes
+    
+    # Needs a fresh session because the old one might be closed
+    from app.db.session import SessionLocal
+    local_db = SessionLocal()
+    try:
+        bookings = local_db.query(Booking).filter(
+            Booking.order_group_id == order_group_id,
+            Booking.status.in_([BookingStatus.PENDING, BookingStatus.UNASSIGNED])
+        ).all()
+        
+        for booking in bookings:
+            booking.status = BookingStatus.CANCELLED
+            
+        if bookings:
+            local_db.commit()
+    finally:
+        local_db.close()
 
 
 @router.post("", response_model=RazorpayOrderResponse)
@@ -42,11 +65,15 @@ def create_booking(
         )
 
     try:
-        booking = booking_service.create_booking(db, current_user["user_id"], request.model_dump())
+        order_group, bookings = booking_service.create_order_group(db, current_user["user_id"], request.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    razorpay_order = booking_service.create_razorpay_order(db, booking)
+    razorpay_order = booking_service.create_razorpay_order(db, order_group)
+    
+    # Spawn background task to auto-cancel if not accepted in 5 mins
+    asyncio.create_task(auto_cancel_booking(db, order_group.id))
+    
     return razorpay_order
 
 
@@ -63,7 +90,7 @@ def verify_payment(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payment verification failed",
         )
-    return {"message": "Payment verified successfully", "booking_id": request.booking_id}
+    return {"message": "Payment verified successfully", "order_group_id": request.order_group_id}
 
 
 @router.get("/{booking_id}", response_model=BookingResponse)

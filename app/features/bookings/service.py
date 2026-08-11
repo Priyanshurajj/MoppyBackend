@@ -20,61 +20,80 @@ def generate_otp() -> str:
     return str(random.randint(1000, 9999))
 
 
+import uuid
+
 def calculate_total(service: Service, duration_mins: int) -> float:
     """Calculate the total price based on base + extra 30-min blocks."""
     extra_blocks = max(0, (duration_mins - service.estimated_time_mins)) // 30
     return service.base_price + (extra_blocks * service.price_per_30min)
 
 
-def create_booking(db: Session, user_id: int, data: dict) -> Booking:
-    """Create a new booking with start/end OTPs and calculated price."""
-    service = db.query(Service).filter(Service.id == data["service_id"]).first()
-    if not service:
-        raise ValueError("Service not found")
-
-    total = calculate_total(service, data["duration_mins"])
-
-    booking = Booking(
+def create_order_group(db: Session, user_id: int, data: dict):
+    """Create an OrderGroup containing multiple Bookings from the cart."""
+    from app.db.models import OrderGroup
+    
+    order_group_id = str(uuid.uuid4())
+    total_amount = 0.0
+    bookings = []
+    
+    for item in data["items"]:
+        service = db.query(Service).filter(Service.id == item["service_id"]).first()
+        if not service:
+            raise ValueError(f"Service with ID {item['service_id']} not found")
+            
+        booking_total = calculate_total(service, item["duration_mins"])
+        total_amount += booking_total
+        
+        booking = Booking(
+            order_group_id=order_group_id,
+            customer_id=user_id,
+            service_id=item["service_id"],
+            booking_type=BookingType(data["booking_type"]),
+            duration_mins=item["duration_mins"],
+            customer_address=data["customer_address"],
+            customer_lat=data["customer_lat"],
+            customer_lng=data["customer_lng"],
+            scheduled_time=data.get("scheduled_time"),
+            total_amount=booking_total,
+            status=BookingStatus.PENDING,
+            start_service_otp=generate_otp(),
+            end_service_otp=generate_otp(),
+        )
+        bookings.append(booking)
+        db.add(booking)
+        
+    order_group = OrderGroup(
+        id=order_group_id,
         customer_id=user_id,
-        service_id=data["service_id"],
-        booking_type=BookingType(data["booking_type"]),
-        duration_mins=data["duration_mins"],
-        customer_address=data["customer_address"],
-        customer_lat=data["customer_lat"],
-        customer_lng=data["customer_lng"],
-        scheduled_time=data.get("scheduled_time"),
-        total_amount=total,
-        status=BookingStatus.PENDING,
-        start_service_otp=generate_otp(),
-        end_service_otp=generate_otp(),
+        total_amount=total_amount
     )
-    db.add(booking)
+    db.add(order_group)
     db.commit()
-    db.refresh(booking)
-    return booking
+    
+    return order_group, bookings
 
 
-def create_razorpay_order(db: Session, booking: Booking) -> dict:
-    """Create a Razorpay order and store the order_id in our Payments table."""
-    amount_paise = int(booking.total_amount * 100)
+def create_razorpay_order(db: Session, order_group) -> dict:
+    """Create a Razorpay order and store it in our Payments table linked to the order_group."""
+    amount_paise = int(order_group.total_amount * 100)
 
     order_data = razorpay_client.order.create({
         "amount": amount_paise,
         "currency": "INR",
-        "receipt": f"moppy_booking_{booking.id}",
+        "receipt": f"moppy_order_{order_group.id[:8]}",
     })
 
     payment = Payment(
-        booking_id=booking.id,
+        order_group_id=order_group.id,
         razorpay_order_id=order_data["id"],
-        amount=booking.total_amount,
+        amount=order_group.total_amount,
         status=PaymentStatus.PENDING,
     )
     db.add(payment)
     db.commit()
 
     return {
-        "booking_id": booking.id,
+        "order_group_id": order_group.id,
         "razorpay_order_id": order_data["id"],
         "amount": amount_paise,
         "currency": "INR",
@@ -83,7 +102,7 @@ def create_razorpay_order(db: Session, booking: Booking) -> dict:
 
 
 def verify_razorpay_payment(db: Session, data: dict) -> bool:
-    """Verify Razorpay signature and update Booking + Payment status."""
+    """Verify Razorpay signature and update Bookings + Payment status."""
     generated_signature = hmac.new(
         settings.RAZORPAY_KEY_SECRET.encode(),
         f"{data['razorpay_order_id']}|{data['razorpay_payment_id']}".encode(),
@@ -102,8 +121,8 @@ def verify_razorpay_payment(db: Session, data: dict) -> bool:
         payment.razorpay_signature = data["razorpay_signature"]
         payment.status = PaymentStatus.SUCCESS
 
-        booking = db.query(Booking).filter(Booking.id == payment.booking_id).first()
-        if booking:
+        bookings = db.query(Booking).filter(Booking.order_group_id == payment.order_group_id).all()
+        for booking in bookings:
             booking.status = BookingStatus.UNASSIGNED  # Ready for dispatch
 
         db.commit()
