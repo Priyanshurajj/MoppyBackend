@@ -2,7 +2,7 @@
 Bookings feature — FastAPI router for booking creation, Razorpay order, and payment verification.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -46,6 +46,7 @@ async def auto_cancel_booking(db: Session, order_group_id: str):
 @router.post("", response_model=RazorpayOrderResponse)
 def create_booking(
     request: CreateBookingRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -72,7 +73,7 @@ def create_booking(
     razorpay_order = booking_service.create_razorpay_order(db, order_group)
     
     # Spawn background task to auto-cancel if not accepted in 5 mins
-    asyncio.create_task(auto_cancel_booking(db, order_group.id))
+    background_tasks.add_task(auto_cancel_booking, db, order_group.id)
     
     return razorpay_order
 
