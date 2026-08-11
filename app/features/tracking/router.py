@@ -67,4 +67,6 @@ def get_cleaner_tracking(
         "booking_status": booking.status.value,
         "customer_lat": booking.customer_lat,
         "customer_lng": booking.customer_lng,
+        "actual_start_time": booking.actual_start_time.isoformat() if booking.actual_start_time else None,
+        "duration_mins": booking.duration_mins,
     }
